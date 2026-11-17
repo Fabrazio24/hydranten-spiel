@@ -1,0 +1,29 @@
+name: Hydrantendaten aktualisieren
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"   # jeden Montag früh
+  push:
+    paths:
+      - scripts/fetch_data.py
+      - .github/workflows/daten.yml
+permissions:
+  contents: write
+concurrency: daten
+jobs:
+  daten:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/fetch_data.py
+      - name: Änderungen committen
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/uelzen.json
+          if git diff --cached --quiet; then echo "Keine Änderungen"; exit 0; fi
+          git commit -m "Hydrantendaten aktualisieren"
+          git push
