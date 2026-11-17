@@ -805,7 +805,7 @@ table.sum tfoot td{font-weight:700;border-bottom:0;font-size:17px}
 <aside id="panel" aria-live="polite">
   <div class="panel-head">
     <svg width="34" height="40" viewBox="0 0 34 40" aria-hidden="true"><rect x="2" y="2" width="30" height="36" rx="2" fill="#fff" stroke="#fff" stroke-width="2"/><rect x="5" y="5" width="24" height="30" fill="none" stroke="#c8102e" stroke-width="3"/><text x="17" y="27" text-anchor="middle" font-family="Barlow Condensed,Arial Narrow,sans-serif" font-weight="800" font-size="20" fill="#c8102e">H</text></svg>
-    <div><h1>Finde den Hydranten</h1><small>Einsatzübung · Landkreis Uelzen</small></div>
+    <div><h1>Finde den Hydranten</h1><small>Einsatzübung · Hansestadt Uelzen</small></div>
   </div>
   <div class="panel-body" id="body"></div>
   <div class="panel-foot" id="foot"></div>
@@ -830,7 +830,6 @@ const OVERPASS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 ];
-const LK_NAME = "Landkreis Uelzen";
 const UELZEN_CENTER = [52.9657, 10.5585];
 
 /* Punkte: volle 5000 bis 5 m Abweichung, danach exponentiell fallend (50 m ≈ 3000, 100 m ≈ 1750, 200 m ≈ 550). */
@@ -861,12 +860,12 @@ function haversine(a, b){
 function shuffle(a){ for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
 function store(key, val){ try { if (val === undefined) return JSON.parse(localStorage.getItem(key)); localStorage.setItem(key, JSON.stringify(val)); } catch(e){ return null; } }
 
-async function overpass(query){
+async function overpass(query, ms=90000){
   let lastErr;
   for (const url of OVERPASS){
     try {
       const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 90000);
+      const t = setTimeout(() => ctl.abort(), ms);
       const res = await fetch(url, {method:"POST", body:"data="+encodeURIComponent(query),
         headers:{"Content-Type":"application/x-www-form-urlencoded"}, signal:ctl.signal});
       clearTimeout(t);
@@ -923,7 +922,7 @@ const SKIP_BUILDINGS = /^(roof|carport|ruins|construction|no|transformer_tower|t
 const KEYWORDS = ["F 2 · Gebäudebrand","F 1 · Kleinbrand","F 3 · Feuer mit Gefahr","F 2 · Rauchentwicklung","F 2 Y · Menschenleben in Gefahr","F 2 · Feuer Dachstuhl","F 1 · Brandmeldeanlage"];
 
 /* ================= Karte ================= */
-const map = L.map("map", {zoomControl:false, maxZoom:19}).setView(UELZEN_CENTER, 10);
+const map = L.map("map", {zoomControl:false, maxZoom:19}).setView(UELZEN_CENTER, 12);
 L.control.zoom({position:"bottomright"}).addTo(map);
 const LAYERS = {
   osm: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende'}),
@@ -968,65 +967,45 @@ const S = {
 
 /* ================= Gebiete laden ================= */
 async function loadAreas(){
-  renderLoading("Gebiete im Landkreis Uelzen werden geladen …");
-  const cached = store("hyd_areas_v1");
+  renderLoading("Ortsteile der Hansestadt Uelzen werden geladen …");
+  const cached = store("hyd_areas_v2");
   if (cached && cached.t > Date.now() - 7*864e5){ S.areas = cached.areas; renderSetup(); drawAreaOutline(); return; }
   try {
-    const q1 = `[out:json][timeout:90];
-rel["boundary"="administrative"]["admin_level"="6"]["name"="${LK_NAME}"]->.lk;
-.lk out geom;
-.lk map_to_area->.a;
-rel(area.a)["boundary"="administrative"]["admin_level"~"^(7|8)$"];
-out tags center;`;
-    const j1 = await overpass(q1);
-    const lkRel = j1.elements.find(e => e.type==="relation" && e.tags && e.tags.name===LK_NAME && e.members);
-    if (!lkRel) throw new Error("Landkreis-Grenze nicht gefunden");
-    const lk = {id:"lk", label:"Landkreis Uelzen (gesamt)", group:"Landkreis", kind:"poly", relId:lkRel.id, ...relGeometry(lkRel)};
-    const subs = j1.elements.filter(e => e.type==="relation" && e.id!==lkRel.id && e.center && inArea([e.center.lat,e.center.lon], lk));
-    const gemeinden = subs.filter(e => e.tags.admin_level==="8").sort((a,b)=>a.tags.name.localeCompare(b.tags.name,"de"));
-    const samtgem = subs.filter(e => e.tags.admin_level==="7").sort((a,b)=>a.tags.name.localeCompare(b.tags.name,"de"));
-    const uelzenRel = gemeinden.find(e => /^(Hansestadt )?Uelzen$/.test(e.tags.name)) || gemeinden.find(e => /Uelzen/.test(e.tags.name));
-
-    const areas = [lk];
-    if (uelzenRel){
-      const q2 = `[out:json][timeout:90];
-rel(${uelzenRel.id})->.u;
+    const q = `[out:json][timeout:40];
+rel["boundary"="administrative"]["admin_level"="8"]["name"~"Uelzen"](52.85,10.40,53.08,10.72)->.u;
 .u out geom;
 .u map_to_area->.ua;
 rel(area.ua)["boundary"="administrative"]["admin_level"~"^(9|10|11)$"];
 out tags center;
-node(area.ua)["place"~"^(suburb|quarter|village|hamlet|neighbourhood|isolated_dwelling)$"]["name"];
+node(area.ua)["place"~"^(suburb|quarter|village|hamlet|neighbourhood)$"]["name"];
 out;`;
-      const j2 = await overpass(q2);
-      const uRel = j2.elements.find(e => e.type==="relation" && e.id===uelzenRel.id && e.members);
-      const city = {id:"r"+uelzenRel.id, label:"Hansestadt Uelzen inkl. Ortsteile", group:"Stadt Uelzen", kind:"poly", relId:uelzenRel.id, ...relGeometry(uRel)};
-      areas.push(city);
-      const seen = new Set();
-      const ots = [];
-      for (const e of j2.elements){
-        if (e.type==="relation" && e.id!==uelzenRel.id && e.center && e.tags && e.tags.name && inArea([e.center.lat,e.center.lon], city)){
-          if (seen.has(e.tags.name)) continue; seen.add(e.tags.name);
-          ots.push({id:"r"+e.id, label:e.tags.name, group:"Ortsteile der Stadt Uelzen", kind:"poly", relId:e.id, lazy:true});
-        }
+    const j = await overpass(q, 30000);
+    const uRel = j.elements.find(e => e.type==="relation" && e.members && e.tags && e.tags.admin_level==="8");
+    if (!uRel) throw new Error("Stadtgrenze nicht gefunden");
+    const city = {id:"city", label:"Hansestadt Uelzen inkl. Ortsteile", group:"Stadt Uelzen", kind:"poly", relId:uRel.id, ...relGeometry(uRel)};
+    const seen = new Set(), ots = [];
+    for (const e of j.elements){
+      if (e.type==="relation" && e.id!==uRel.id && e.center && e.tags && e.tags.name && inArea([e.center.lat,e.center.lon], city)){
+        if (seen.has(e.tags.name)) continue; seen.add(e.tags.name);
+        ots.push({id:"r"+e.id, label:e.tags.name, group:"Ortsteile", kind:"poly", relId:e.id, lazy:true});
       }
-      for (const e of j2.elements){
-        if (e.type==="node" && e.tags && e.tags.name && !seen.has(e.tags.name) && inArea([e.lat,e.lon], city)){
-          seen.add(e.tags.name);
-          const r = ({suburb:900, quarter:600, neighbourhood:450, village:900, hamlet:500, isolated_dwelling:300})[e.tags.place] || 700;
-          ots.push({id:"n"+e.id, label:e.tags.name, group:"Ortsteile der Stadt Uelzen", kind:"circle", center:[e.lat,e.lon], radius:r});
-        }
-      }
-      ots.sort((a,b)=>a.label.localeCompare(b.label,"de"));
-      areas.push(...ots);
     }
-    for (const e of samtgem) areas.push({id:"r"+e.id, label:e.tags.name, group:"Samtgemeinden", kind:"poly", relId:e.id, lazy:true});
-    for (const e of gemeinden) if (!uelzenRel || e.id!==uelzenRel.id) areas.push({id:"r"+e.id, label:e.tags.name, group:"Gemeinden", kind:"poly", relId:e.id, lazy:true});
-    S.areas = areas;
-    store("hyd_areas_v1", {t:Date.now(), areas});
+    for (const e of j.elements){
+      if (e.type==="node" && e.tags && e.tags.name && !seen.has(e.tags.name) && inArea([e.lat,e.lon], city)){
+        seen.add(e.tags.name);
+        const r = ({suburb:900, quarter:600, neighbourhood:450, village:900, hamlet:500})[e.tags.place] || 700;
+        ots.push({id:"n"+e.id, label:e.tags.name, group:"Ortsteile", kind:"circle", center:[e.lat,e.lon], radius:r});
+      }
+    }
+    ots.sort((a,b)=>a.label.localeCompare(b.label,"de"));
+    S.areas = [city, ...ots];
+    S.loadError = null;
+    store("hyd_areas_v2", {t:Date.now(), areas:S.areas});
   } catch(e){
     console.warn(e);
-    S.areas = [];
-    S.loadError = "Die Gebietsgrenzen konnten nicht von OpenStreetMap geladen werden (" + e.message + "). Du kannst trotzdem mit dem aktuellen Kartenausschnitt spielen.";
+    // Rückfall ohne Grenzdaten: Stadtgebiet als Rechteck um Uelzen
+    S.areas = [{id:"citybox", label:"Hansestadt Uelzen (Umgebung)", group:"Stadt Uelzen", kind:"bbox", bbox:[52.90,10.47,53.03,10.65]}];
+    S.loadError = null;
   }
   renderSetup();
   drawAreaOutline();
@@ -1060,6 +1039,7 @@ async function drawAreaOutline(fit=true){
   let layer;
   if (a.kind === "poly") layer = L.polyline(a.lines, style);
   else if (a.kind === "circle") layer = L.circle(a.center, {...style, radius:a.radius});
+  else if (a.kind === "bbox" && a.id !== "view") layer = L.rectangle([[a.bbox[0],a.bbox[1]],[a.bbox[2],a.bbox[3]]], style);
   else return;
   layer.addTo(outlineLayer);
   if (fit && S.phase === "setup") map.fitBounds(layer.getBounds(), {padding:[30,30], paddingTopLeft: panelPad(), animate:false});
@@ -1075,7 +1055,7 @@ async function startGame(){
   store("hyd_prefs", {area:$("#area").value, timed:S.timed});
   if (area.kind === "bbox"){
     const [s,w,n,e] = area.bbox;
-    if ((n-s) > 0.6 || (e-w) > 0.9){ showError("Der Kartenausschnitt ist zu groß. Zoome weiter hinein (höchstens etwa Landkreisgröße)."); return; }
+    if ((n-s) > 0.2 || (e-w) > 0.3){ showError("Der Kartenausschnitt ist zu groß. Zoome weiter hinein (höchstens etwa Stadtgröße)."); return; }
   }
   S.area = area;
   renderLoading("Hydranten werden aus OpenStreetMap geladen …");
