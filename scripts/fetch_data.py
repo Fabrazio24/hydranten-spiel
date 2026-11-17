@@ -1,6 +1,6 @@
 """Lädt Stadtgrenze, Ortsteile, Hydranten und Gebäude der Hansestadt Uelzen aus OpenStreetMap
 (Overpass API) und schreibt sie kompakt nach data/uelzen.json. Läuft per GitHub Action."""
-import json, sys, time, urllib.parse, urllib.request
+import json, os, sys, time, urllib.parse, urllib.request
 
 ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -73,6 +73,7 @@ out tags geom;''')
     out = {"generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "source": "© OpenStreetMap-Mitwirkende (ODbL)",
            "city": {"id": city["id"], "name": city["tags"].get("name"), "lines": city_lines, "bbox": bbox},
            "ortsteile": rels, "places": places, "hydrants": hydrants, "buildings": buildings}
+    os.makedirs("data", exist_ok=True)
     with open("data/uelzen.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     print(f"{len(rels)} Ortsteil-Grenzen, {len(places)} Orte, {len(hydrants)} Hydranten, {len(buildings)} Gebäude")
