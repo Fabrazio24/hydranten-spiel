@@ -966,8 +966,46 @@ const S = {
 };
 
 /* ================= Gebiete laden ================= */
+/* Vorab erzeugte Daten (data/uelzen.json, per GitHub Action aus OpenStreetMap) machen den Start schnell. */
+async function loadDataset(){
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const res = await fetch("data/uelzen.json", {signal:ctl.signal, cache:"no-cache"});
+    if (!res.ok) return false;
+    const d = await res.json();
+    if (!d.hydrants || d.hydrants.length < ROUNDS) return false;
+    S.dataset = d;
+    const city = {id:"city", label:"Hansestadt Uelzen inkl. Ortsteile", group:"Stadt Uelzen", kind:"poly", lines:d.city.lines, bbox:d.city.bbox};
+    const seen = new Set(), ots = [];
+    for (const o of d.ortsteile){
+      if (!o.lines.length || seen.has(o.name)) continue;
+      const g = relGeometry({members:o.lines.map(l => ({type:"way", role:"outer", geometry:l.map(p => ({lat:p[0], lon:p[1]}))}))});
+      const c = [(g.bbox[0]+g.bbox[2])/2, (g.bbox[1]+g.bbox[3])/2];
+      if (!inArea(c, city)) continue;
+      seen.add(o.name);
+      ots.push({id:"r"+o.id, label:o.name, group:"Ortsteile", kind:"poly", lines:g.lines, bbox:g.bbox});
+    }
+    for (const p of d.places){
+      if (seen.has(p.name) || !inArea(p.pos, city)) continue;
+      seen.add(p.name);
+      const r = ({suburb:900, quarter:600, neighbourhood:450, village:900, hamlet:500})[p.place] || 700;
+      ots.push({id:"n"+p.id, label:p.name, group:"Ortsteile", kind:"circle", center:p.pos, radius:r});
+    }
+    ots.sort((a,b) => a.label.localeCompare(b.label, "de"));
+    S.areas = [city, ...ots];
+    S.dsBuildings = d.buildings.map((b, i) => {
+      const c = b.p.reduce((s,q) => [s[0]+q[0], s[1]+q[1]], [0,0]).map(v => v/b.p.length);
+      const tags = {building:b.t}; if (b.n) tags.name = b.n; if (b.s) tags["addr:street"] = b.s; if (b.h) tags["addr:housenumber"] = b.h;
+      return {id:i, pos:c, lines:b.p, tags};
+    });
+    return true;
+  } catch(e){ console.warn("Datendatei nicht geladen", e); return false; }
+  finally { clearTimeout(t); }
+}
+
 async function loadAreas(){
-  renderLoading("Ortsteile der Hansestadt Uelzen werden geladen …");
+  renderLoading("Daten der Hansestadt Uelzen werden geladen …");
+  if (await loadDataset()){ renderSetup(); drawAreaOutline(); return; }
   const cached = store("hyd_areas_v2");
   if (cached && cached.t > Date.now() - 7*864e5){ S.areas = cached.areas; renderSetup(); drawAreaOutline(); return; }
   try {
@@ -1062,8 +1100,12 @@ async function startGame(){
   try {
     await ensureGeometry(area);
     const bb = areaBBox(area, 0.008);
-    const jh = await overpass(`[out:json][timeout:120];node["emergency"="fire_hydrant"](${bb.join(",")});out;`);
-    S.hydrants = jh.elements.filter(e => e.type==="node").map(e => ({pos:[e.lat,e.lon], tags:e.tags||{}}));
+    if (S.dataset){
+      S.hydrants = S.dataset.hydrants.map(h => ({pos:[h[0],h[1]], tags:{"fire_hydrant:type":h[2], "fire_hydrant:diameter":h[3]}}));
+    } else {
+      const jh = await overpass(`[out:json][timeout:120];node["emergency"="fire_hydrant"](${bb.join(",")});out;`, 45000);
+      S.hydrants = jh.elements.filter(e => e.type==="node").map(e => ({pos:[e.lat,e.lon], tags:e.tags||{}}));
+    }
     const inside = S.hydrants.filter(h => inArea(h.pos, area));
     if (inside.length < ROUNDS) throw new Error(`In diesem Gebiet sind in OpenStreetMap nur ${inside.length} Hydranten erfasst. Bitte ein größeres Gebiet wählen.`);
     renderLoading(`${fmtInt(inside.length)} Hydranten gefunden. Brandobjekte werden ausgewählt …`);
@@ -1098,7 +1140,8 @@ async function pickFireObjects(area, inside){
   const R = area.kind === "circle" ? 300 : 450;
   const q = `[out:json][timeout:90];(${anchors.map(a => `way["building"](around:${R},${a.pos[0]},${a.pos[1]});`).join("")});out tags geom;`;
   let buildings = [];
-  try {
+  if (S.dataset) buildings = S.dsBuildings.filter(b => inArea(b.pos, area));
+  else try {
     const jb = await overpass(q);
     buildings = jb.elements.filter(e => e.type==="way" && e.geometry && e.geometry.length >= 3 && !SKIP_BUILDINGS.test(e.tags.building||""))
       .map(e => {
@@ -1255,7 +1298,7 @@ function renderSetup(){
       <li><b class="n">100 m</b><span>daneben bringt noch etwa ${fmtInt(scoreFor(100))} Punkte</span></li>
     </ul>
     ${best ? `<p class="muted">Bestwert auf diesem Gerät: <b>${fmtInt(best.total)}</b> Punkte (${esc(best.area)})</p>` : ""}
-    <p class="muted" style="font-size:13px">Hydrantendaten: OpenStreetMap (emergency=fire_hydrant). Nicht jeder reale Hydrant ist dort erfasst.</p>
+    <p class="muted" style="font-size:13px">Hydrantendaten: OpenStreetMap (emergency=fire_hydrant). Nicht jeder reale Hydrant ist dort erfasst.${S.dataset ? ` Datenstand: ${esc(new Date(S.dataset.generated).toLocaleDateString("de-DE"))}.` : ""}</p>
   `, `<button class="btn" id="start" type="button">Alarm auslösen</button>`);
   const sel = $("#area");
   if (prefs.area && [...sel.options].some(o => o.value === prefs.area)) sel.value = prefs.area;
